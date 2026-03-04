@@ -6,27 +6,43 @@ import numpy as np
 from PIL import Image
 from flask import Flask, request, jsonify, render_template
 
+# Optimization for low-memory environments
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TF logging to save some overhead
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0' # Disable some optimizations to save RAM
+
 app = Flask(__name__)
 
 # Load face cascade
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-# Ensure model directory exists
-model_path = "model/deepfake_model.h5"
+# Global model variable
+model = None
 
-if not os.path.exists(model_path):
-    print("Downloading model...")
-    os.makedirs("model", exist_ok=True)
-    url = "https://drive.google.com/uc?id=1PRQ2PNMJKJhJPYWkeAWpjksr6A26hSPF"
-    gdown.download(url, model_path, quiet=False)
-
-print("Loading model...")
-model = tf.keras.models.load_model(model_path)
-print("Model loaded successfully.")
+def load_model():
+    global model
+    if model is not None:
+        return model
+        
+    model_path = "model/deepfake_model.h5"
+    if not os.path.exists(model_path):
+        print("Downloading model...")
+        os.makedirs("model", exist_ok=True)
+        url = "https://drive.google.com/uc?id=1PRQ2PNMJKJhJPYWkeAWpjksr6A26hSPF"
+        gdown.download(url, model_path, quiet=False)
+        
+    print("Loading model (memory optimized)...")
+    # compile=False is CRITICAL for low RAM environments (skips optimizer loading)
+    model = tf.keras.models.load_model(model_path, compile=False)
+    print("Model loaded successfully.")
+    return model
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.route("/health")
+def health():
+    return "OK", 200
 
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -38,6 +54,9 @@ def predict():
         return jsonify({'error': 'No file selected'}), 400
     
     try:
+        # Load model lazily
+        current_model = load_model()
+        
         # Read the image file using OpenCV from the stream
         file_bytes = np.frombuffer(file.read(), np.uint8)
         img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
@@ -74,13 +93,13 @@ def predict():
         else:
             # Fallback to the whole image
             img = img_array
-
+        
         img = cv2.resize(img, (224, 224))
         img = img / 255.0
         img = np.expand_dims(img, axis=0)
 
         # Predict
-        prediction = model.predict(img)[0][0]
+        prediction = current_model.predict(img)[0][0]
         confidence = float(prediction)
 
         if prediction > 0.5:
@@ -108,4 +127,5 @@ def predict():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+
