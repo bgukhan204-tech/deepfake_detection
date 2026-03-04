@@ -28,12 +28,20 @@ def load_model():
         
     model_path = "model/deepfake_model.h5"
     if not os.path.exists(model_path):
-        print("Downloading model...")
-        os.makedirs("model", exist_ok=True)
-        url = "https://drive.google.com/uc?id=1PRQ2PNMJKJhJPYWkeAWpjksr6A26hSPF"
-        gdown.download(url, model_path, quiet=False)
+        # Check parent directory as well
+        alt_path = "deepfake_model.h5"
+        if os.path.exists(alt_path):
+            model_path = alt_path
+        else:
+            raise FileNotFoundError(f"Model file not found at {model_path}. Please check Render build logs.")
         
-    print("Loading model (memory optimized)...")
+    print(f"Loading model from {model_path} (memory optimized)...")
+    
+    # Clear any previous sessions to free up RAM
+    import gc
+    tf.keras.backend.clear_session()
+    gc.collect()
+    
     # compile=False is CRITICAL for low RAM environments (skips optimizer loading)
     model = tf.keras.models.load_model(model_path, compile=False)
     print("Model loaded successfully.")
