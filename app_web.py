@@ -4,6 +4,8 @@ import tensorflow as tf
 import cv2
 import numpy as np
 from PIL import Image
+from flask import Flask, request, jsonify, render_template
+
 # Optimization for low-memory environments
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
