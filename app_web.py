@@ -4,11 +4,12 @@ import tensorflow as tf
 import cv2
 import numpy as np
 from PIL import Image
-from flask import Flask, request, jsonify, render_template
-
 # Optimization for low-memory environments
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TF logging to save some overhead
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0' # Disable some optimizations to save RAM
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+# LIMIT THREADS: Saves significant stack memory on Render
+os.environ['TF_NUM_INTEROP_THREADS'] = '1'
+os.environ['TF_NUM_INTRAOP_THREADS'] = '1'
 
 app = Flask(__name__)
 
