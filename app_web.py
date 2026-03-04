@@ -55,17 +55,22 @@ def predict():
         return jsonify({'error': 'No file selected'}), 400
     
     try:
+        print(f"DEBUG: Processing file {file.filename}")
         # Load model lazily
         current_model = load_model()
         
         # Read the image file using OpenCV from the stream
+        print("DEBUG: Reading file bytes...")
         file_bytes = np.frombuffer(file.read(), np.uint8)
+        print(f"DEBUG: Decoding image ({len(file_bytes)} bytes)...")
         img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         
         if img_bgr is None:
+            print("ERROR: img_bgr is None")
             return jsonify({'error': 'Invalid image format'}), 400
 
         # Preprocessing matching the standalone script
+        print("DEBUG: Converting color space...")
         img_array = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         
         # Face Detection
@@ -95,13 +100,16 @@ def predict():
             # Fallback to the whole image
             img = img_array
         
+        print("DEBUG: Resizing and scaling...")
         img = cv2.resize(img, (224, 224))
         img = img / 255.0
         img = np.expand_dims(img, axis=0)
 
         # Predict
+        print("DEBUG: Running prediction...")
         prediction = current_model.predict(img)[0][0]
         confidence = float(prediction)
+        print(f"DEBUG: Prediction finished. Confidence: {confidence}")
 
         if prediction > 0.5:
             # Prediction near 1.0 -> 'real' (index 1)
@@ -125,8 +133,12 @@ def predict():
             })
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        error_msg = f"{str(e)}\n{traceback.format_exc()}"
+        print(f"ERROR: {error_msg}")
+        return jsonify({'error': f"Processing failed: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=True, host='0.0.0.0', port=port)
 
