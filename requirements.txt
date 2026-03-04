@@ -1,9 +1,6 @@
 tensorflow-cpu
 opencv-python-headless
 numpy
-matplotlib
-scikit-learn
-streamlit
 pillow
 gdown
 Flask
