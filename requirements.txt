@@ -1,7 +1,6 @@
-tensorflow-cpu
+tflite-runtime
 opencv-python-headless
 numpy
 pillow
-gdown
 Flask
 gunicorn
