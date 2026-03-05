@@ -1,51 +1,54 @@
 import os
-import gdown
-import tensorflow as tf
 import cv2
 import numpy as np
+import gc
 from PIL import Image
 from flask import Flask, request, jsonify, render_template
 
-# Optimization for low-memory environments
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-# LIMIT THREADS: Saves significant stack memory on Render
-os.environ['TF_NUM_INTEROP_THREADS'] = '1'
-os.environ['TF_NUM_INTRAOP_THREADS'] = '1'
+# Detect environment
+try:
+    # On most cloud servers we use tflite-runtime for speed/memory
+    import tflite_runtime.interpreter as tflite
+except ImportError:
+    # Fallback for local testing where full tensorflow might be installed
+    import tensorflow.lite as tflite
 
 app = Flask(__name__)
 
 # Load face cascade
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-# Global model variable
-model = None
+# Global interpreter and details
+interpreter = None
+input_details = None
+output_details = None
 
 def load_model():
-    global model
-    if model is not None:
-        return model
+    global interpreter, input_details, output_details
+    if interpreter is not None:
+        return interpreter, input_details, output_details
         
-    model_path = "model/deepfake_model.h5"
+    # We now expect the .tflite model in the model/ folder
+    model_path = "model/deepfake_model.tflite"
     if not os.path.exists(model_path):
-        # Check parent directory as well
-        alt_path = "deepfake_model.h5"
-        if os.path.exists(alt_path):
-            model_path = alt_path
-        else:
-            raise FileNotFoundError(f"Model file not found at {model_path}. Please check Render build logs.")
+        # Fallback for root
+        model_path = "deepfake_model.tflite"
         
-    print(f"Loading model from {model_path} (memory optimized)...")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"TFLite model not found at {model_path}. Please run convert_to_tflite.py locally.")
+        
+    print(f"🚀 Loading TFLite model: {model_path}...")
     
-    # Clear any previous sessions to free up RAM
-    import gc
-    tf.keras.backend.clear_session()
-    gc.collect()
+    # Initialize interpreter
+    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter.allocate_tensors()
     
-    # compile=False is CRITICAL for low RAM environments (skips optimizer loading)
-    model = tf.keras.models.load_model(model_path, compile=False)
-    print("Model loaded successfully.")
-    return model
+    # Get input and output details
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    
+    print("✅ TFLite model loaded successfully.")
+    return interpreter, input_details, output_details
 
 @app.route("/")
 def index():
@@ -66,35 +69,28 @@ def predict():
     
     try:
         print(f"DEBUG: Processing file {file.filename}")
-        # Load model lazily
-        current_model = load_model()
+        # Load TFLite interpreter
+        interp, inp, out = load_model()
         
-        # Read the image file using OpenCV from the stream
-        print("DEBUG: Reading file bytes...")
+        # Read the image file using OpenCV
         file_bytes = np.frombuffer(file.read(), np.uint8)
-        print(f"DEBUG: Decoding image ({len(file_bytes)} bytes)...")
         img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         
         if img_bgr is None:
-            print("ERROR: img_bgr is None")
             return jsonify({'error': 'Invalid image format'}), 400
 
-        # Preprocessing matching the standalone script
-        print("DEBUG: Converting color space...")
         img_array = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         
         # Face Detection
         gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-        # Lower minNeighbors and scaleFactor to catch smaller/distant faces in camera photos
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=4, minSize=(50, 50))
         
         face_detected = False
         if len(faces) > 0:
-            # Find the largest face by area
             largest_face = max(faces, key=lambda f: f[2] * f[3])
             x, y, w, h = largest_face
             
-            # Increase padding to 30% to capture full head context instead of just facial features
+            # Padding
             pad_x = int(w * 0.3)
             pad_y = int(h * 0.3)
             
@@ -103,26 +99,29 @@ def predict():
             x1 = max(0, x - pad_x)
             x2 = min(img_array.shape[1], x + w + pad_x)
             
-            # Crop the face
             img = img_array[y1:y2, x1:x2]
             face_detected = True
         else:
-            # Fallback to the whole image
             img = img_array
         
-        print("DEBUG: Resizing and scaling...")
+        # Preprocessing
         img = cv2.resize(img, (224, 224))
-        img = img / 255.0
+        img = img.astype(np.float32) / 255.0  # TFLite expects float32
         img = np.expand_dims(img, axis=0)
 
-        # Predict
-        print("DEBUG: Running prediction...")
-        prediction = current_model.predict(img)[0][0]
+        # Run TFLite inference
+        print("DEBUG: Running TFLite inference...")
+        interp.set_tensor(inp[0]['index'], img)
+        interp.invoke()
+        prediction = interp.get_tensor(out[0]['index'])[0][0]
+        
         confidence = float(prediction)
-        print(f"DEBUG: Prediction finished. Confidence: {confidence}")
+        print(f"DEBUG: Finished. Confidence: {confidence}")
+
+        # Clean memory
+        gc.collect()
 
         if prediction > 0.5:
-            # Prediction near 1.0 -> 'real' (index 1)
             return jsonify({
                 'status': 'REAL',
                 'confidence': confidence,
@@ -132,7 +131,6 @@ def predict():
                 'face_detected': face_detected
             })
         else:
-            # Prediction near 0.0 -> 'fake' (index 0)
             return jsonify({
                 'status': 'MANIPULATED',
                 'confidence': 1.0 - confidence,
@@ -146,7 +144,7 @@ def predict():
         import traceback
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
         print(f"ERROR: {error_msg}")
-        return jsonify({'error': f"Processing failed: {str(e)}"}), 500
+        return jsonify({'error': f"Inference failed: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
