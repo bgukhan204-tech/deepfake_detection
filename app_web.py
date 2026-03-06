@@ -37,17 +37,27 @@ def load_model():
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"TFLite model not found at {model_path}. Please run convert_to_tflite.py locally.")
         
-    print(f"🚀 Loading TFLite model: {model_path}...")
+    # Log the file size to verify it uploaded correctly to Render
+    size_mb = os.path.getsize(model_path) / (1024 * 1024)
+    print(f"🚀 Loading TFLite model from {model_path} (Size: {size_mb:.2f} MB)...")
     
-    # Initialize interpreter
-    interpreter = tflite.Interpreter(model_path=model_path)
+    if size_mb < 0.1:
+        print("❌ CRITICAL ERROR: The model file on the server is EMPTY or corrupted (size ~0MB).")
+        raise ValueError("Model file is empty. Please re-upload to GitHub.")
+
+    # USE MODEL_CONTENT instead of model_path to bypass 'mmap' issues on cloud servers
+    with open(model_path, 'rb') as f:
+        model_content = f.read()
+        
+    # Initialize interpreter from buffer
+    interpreter = tflite.Interpreter(model_content=model_content)
     interpreter.allocate_tensors()
     
     # Get input and output details
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
     
-    print("✅ TFLite model loaded successfully.")
+    print("✅ TFLite model loaded successfully from buffer.")
     return interpreter, input_details, output_details
 
 @app.route("/")
